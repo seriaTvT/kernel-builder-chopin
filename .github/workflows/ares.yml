@@ -136,7 +136,7 @@ jobs:
           # 禁用较慢的 Azure 镜像
           sudo sed -i '/azure.archive.ubuntu.com/d' /etc/apt/apt-mirrors.txt
           sudo apt-get update
-          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+          sudo apt-get install -y build-essential bc \
             libssl-dev libfl-dev curl git ccache python2 python2-dev zip unzip
 
       # ── 2. 克隆内核源码 ──
@@ -158,8 +158,21 @@ jobs:
           done
           tar -xf clang.tar.gz -C aosp-clang
 
+          # AOSP GCC 4.9 binutils（与 vendor/lineage kernel.mk 保持一致）
+          # 顶层 Makefile 为 clang 无条件附加 -no-integrated-as，汇编器与
+          # ar/nm/objcopy/strip 等仍取自 $(CROSS_COMPILE)*，因此必须使用与本地
+          # 构建相同的 GCC 4.9 binutils，而非 Ubuntu 自带的 aarch64-linux-gnu 工具链。
+          git clone --depth=1 -b lineage-19.1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
+            gcc-aarch64-4.9
+          git clone --depth=1 -b lineage-19.1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
+            gcc-arm-4.9
+
           # 导入环境变量
           echo "${{ github.workspace }}/aosp-clang/bin" >> $GITHUB_PATH
+          echo "${{ github.workspace }}/gcc-aarch64-4.9/bin" >> $GITHUB_PATH
+          echo "${{ github.workspace }}/gcc-arm-4.9/bin" >> $GITHUB_PATH
 
       # ── 4. 准备 AnyKernel3 ──
       - name: 准备 AnyKernel3
@@ -254,6 +267,11 @@ jobs:
 
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
 
+          # defconfig 末尾可能没有换行符，直接追加会把首行拼到最后一行上
+          # （CONFIG_XXX=yCONFIG_KSU=y），使该行成为非法符号。
+          DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG_NAME }}"
+          if [ -n "$(tail -c1 "$DEFCONFIG")" ]; then echo >> "$DEFCONFIG"; fi
+
           echo -e "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG_NAME }}
           echo -e "CONFIG_KSU_MANUAL_HOOK=y" >> arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG_NAME }}
           echo -e "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/${{ env.ARCH }}/configs/${{ env.DEFCONFIG_NAME }}
@@ -327,6 +345,8 @@ jobs:
           if grep -q "Droidspaces support (non-GKI)" "$DEFCONFIG"; then
             echo "Droidspaces 内核配置已存在，跳过追加"
           else
+          # 同上：确保 defconfig 以换行结尾后再追加
+          if [ -n "$(tail -c1 "$DEFCONFIG")" ]; then echo >> "$DEFCONFIG"; fi
           cat >> "$DEFCONFIG" << 'EOF'
 
           # ===== Droidspaces support (non-GKI) =====
@@ -489,16 +509,10 @@ jobs:
             ARCH=${{ env.ARCH }} \
             CC="${CC_CMD}" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-androideabi- \
             LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            READELF=llvm-readelf \
-            STRIP=llvm-strip \
-            OBJSIZE=llvm-size \
             ${{ env.DEFCONFIG_NAME }}
 
       - name: 编译内核与设备树
@@ -522,16 +536,10 @@ jobs:
             ARCH=${{ env.ARCH }} \
             CC="${CC_CMD}" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-androideabi- \
             LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            READELF=llvm-readelf \
-            STRIP=llvm-strip \
-            OBJSIZE=llvm-size \
             Image dtbs
 
       - name: 输出 ccache 统计
